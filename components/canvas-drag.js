@@ -13,6 +13,7 @@ class dragImg {
     this.ctx = canvas;
     this.rotate = 0;
     this.selected = true;
+    this.scale = 1;
   }
   paint() {
     this.ctx.save();
@@ -104,7 +105,12 @@ Component({
    */
   data: {
     ctx: null,
-    dragArr: []
+    dragArr: [],
+    clickedkArr: [],
+    lastImg: null,
+    initial: null,
+    startTouch: null,
+    twoFingerInitial: null
   },
   ready() {
     this.data.ctx = wx.createCanvasContext("canvas", this);
@@ -130,84 +136,167 @@ Component({
     start(e) {
       //初始化一个数组用于存放所有被点击到的图片对象
       this.data.clickedkArr = []
-      const { x, y } = e.touches[0]
-      this.data.dragArr.forEach((item,index) => {
-        const place = item.isInWhere(x, y)
-        item.place = place
-        item.index = index
-        //先将所有的item的selected变为flase
-        item.selected = false
-        if (place) {
-          this.data.clickedkArr.push(item)
-        }
-      })
-      const length = this.data.clickedkArr.length
-      if (length) {
-        //我们知道cavans绘制的图片的层级是越来越高的，因此我们取这个数组的最后一项，保证取到的图片实例是层级最高的
-        const lastImg = this.data.clickedkArr[length - 1]
-        //如果是删除的话就移除
-        if(lastImg.place ==='del'){
-          this.data.dragArr.splice(lastImg.index,1)
-          //重新绘制
-          this.draw()
-          return
-        }
-        //将该实例的被选值设为true，下次重新绘制将绘制边框
-        lastImg.selected = true
-        //保存这个选中的实例
-        this.data.lastImg = lastImg
-        //保存这个实例的初始值，以后会用上
-        this.data.initial = {
-          initialX: lastImg.x,
-          initialY: lastImg.y,
-          initialH:lastImg.h,
-          initialW:lastImg.w,
-          initialRotate:lastImg.rotate
-        }
-      }
-      //重新绘制
-      this.draw()
-      //保存点击的坐标，move时要用
-      this.data.startTouch = { startX : x, startY : y }
-    },
-    move(e) {
-      const { x, y } = e.touches[0]
-      const { initialX, initialY } = this.data.initial
-      const { startX, startY } = this.data.startTouch
-      const lastImg = this.data.lastImg
-      if (this.data.clickedkArr.length) {
-        if (this.data.lastImg.place === 'move') {
-          //算出移动后的xy坐标与点击时xy坐标的差（即平移量）与图片对象的初始坐标相加即可
-          lastImg.x = initialX + (x - startX)
-          lastImg.y = initialY + (y - startY)
-        }
-        if (this.data.lastImg.place === 'transform'){
-          const { centerX, centerY } = lastImg
-          //旋转部分
-          const { initialRotate } = this.data.initial
-          const angleBefore = Math.atan2(startY - centerY, startX - centerX) / Math.PI * 180;
-          const angleAfter = Math.atan2(y - centerY, x - centerX) / Math.PI * 180;
-          // 旋转的角度
-          lastImg.rotate = initialRotate + angleAfter - angleBefore
-          //缩放部分
-          const { initialH, initialW } = this.data.initial
-          //用勾股定理算出距离
-          let lineA = Math.sqrt(Math.pow(centerX - startX, 2) + Math.pow(centerY - startY, 2));
-          let lineB = Math.sqrt(Math.pow(centerX - x, 2) + Math.pow(centerY - y, 2));
-          let w = initialW + (lineB - lineA);
-          //由于是等比缩放，所以乘一个宽高比例。
-          let h = initialH + (lineB - lineA) * (initialH / initialW);
-          //定义最小宽高
-          lastImg.w = w <= 5 ? 5 : w;
-          lastImg.h = h <= 5 ? 5 : h;
-          if (w > 5 && h > 5) {
-            // 放大 或 缩小
-            lastImg.x = initialX - (lineB - lineA) / 2;
-            lastImg.y = initialY - (lineB - lineA) / 2;
+      const touchCount = e.touches.length;
+      
+      if (touchCount === 1) {
+        // 单指操作
+        const { x, y } = e.touches[0]
+        this.data.dragArr.forEach((item,index) => {
+          const place = item.isInWhere(x, y)
+          item.place = place
+          item.index = index
+          item.selected = false
+          if (place) {
+            this.data.clickedkArr.push(item)
+          }
+        })
+        const length = this.data.clickedkArr.length
+        if (length) {
+          const lastImg = this.data.clickedkArr[length - 1]
+          if(lastImg.place ==='del'){
+            this.data.dragArr.splice(lastImg.index,1)
+            this.draw()
+            return
+          }
+          lastImg.selected = true
+          this.data.lastImg = lastImg
+          this.data.initial = {
+            initialX: lastImg.x,
+            initialY: lastImg.y,
+            initialH: lastImg.h,
+            initialW: lastImg.w,
+            initialRotate: lastImg.rotate,
+            initialScale: lastImg.scale
           }
         }
         this.draw()
+        this.data.startTouch = { startX: e.touches[0].x, startY: e.touches[0].y }
+      } else if (touchCount === 2) {
+        // 双指操作
+        const touch1 = e.touches[0];
+        const touch2 = e.touches[1];
+        
+        // 计算初始两指之间的距离
+        const initialDistance = Math.sqrt(
+          Math.pow(touch2.x - touch1.x, 2) + 
+          Math.pow(touch2.y - touch1.y, 2)
+        );
+        
+        // 计算初始两指形成的角度
+        const initialAngle = Math.atan2(
+          touch2.y - touch1.y,
+          touch2.x - touch1.x
+        ) * 180 / Math.PI;
+        
+        this.data.twoFingerInitial = {
+          distance: initialDistance,
+          angle: initialAngle
+        };
+        
+        // 找到最上层的图片
+        if (this.data.dragArr.length > 0) {
+          const lastImg = this.data.dragArr[this.data.dragArr.length - 1];
+          lastImg.selected = true;
+          this.data.lastImg = lastImg;
+          this.data.initial = {
+            initialX: lastImg.x,
+            initialY: lastImg.y,
+            initialH: lastImg.h,
+            initialW: lastImg.w,
+            initialRotate: lastImg.rotate,
+            initialScale: lastImg.scale
+          };
+        }
       }
+    },
+    move(e) {
+      const touchCount = e.touches.length;
+      
+      if (touchCount === 1 && this.data.lastImg) {
+        // 单指移动逻辑
+        const { x, y } = e.touches[0]
+        const { initialX, initialY } = this.data.initial
+        const { startX, startY } = this.data.startTouch
+        const lastImg = this.data.lastImg
+        
+        if (this.data.clickedkArr.length) {
+          if (this.data.lastImg.place === 'move') {
+            lastImg.x = initialX + (x - startX)
+            lastImg.y = initialY + (y - startY)
+          }
+          if (this.data.lastImg.place === 'transform'){
+            const { centerX, centerY } = lastImg
+            const { initialRotate } = this.data.initial
+            const angleBefore = Math.atan2(startY - centerY, startX - centerX) / Math.PI * 180;
+            const angleAfter = Math.atan2(y - centerY, x - centerX) / Math.PI * 180;
+            lastImg.rotate = initialRotate + angleAfter - angleBefore
+            
+            const { initialH, initialW } = this.data.initial
+            let lineA = Math.sqrt(Math.pow(centerX - startX, 2) + Math.pow(centerY - startY, 2));
+            let lineB = Math.sqrt(Math.pow(centerX - x, 2) + Math.pow(centerY - y, 2));
+            let w = initialW + (lineB - lineA);
+            let h = initialH + (lineB - lineA) * (initialH / initialW);
+            lastImg.w = w <= 5 ? 5 : w;
+            lastImg.h = h <= 5 ? 5 : h;
+            if (w > 5 && h > 5) {
+              lastImg.x = initialX - (lineB - lineA) / 2;
+              lastImg.y = initialY - (lineB - lineA) / 2;
+            }
+          }
+          this.draw()
+        }
+      } else if (touchCount === 2 && this.data.lastImg && this.data.twoFingerInitial) {
+        // 双指缩放和旋转逻辑
+        const touch1 = e.touches[0];
+        const touch2 = e.touches[1];
+        const lastImg = this.data.lastImg;
+        
+        // 计算当前两指之间的距离
+        const currentDistance = Math.sqrt(
+          Math.pow(touch2.x - touch1.x, 2) + 
+          Math.pow(touch2.y - touch1.y, 2)
+        );
+        
+        // 计算当前两指形成的角度
+        const currentAngle = Math.atan2(
+          touch2.y - touch1.y,
+          touch2.x - touch1.x
+        ) * 180 / Math.PI;
+        
+        // 计算缩放比例
+        const scale = currentDistance / this.data.twoFingerInitial.distance;
+        const newScale = this.data.initial.initialScale * scale;
+        
+        // 计算旋转角度
+        const rotateDelta = currentAngle - this.data.twoFingerInitial.angle;
+        const newRotate = this.data.initial.initialRotate + rotateDelta;
+        
+        // 计算图片中心点
+        const centerX = lastImg.x + lastImg.w / 2;
+        const centerY = lastImg.y + lastImg.h / 2;
+        
+        // 计算新的宽高
+        const newWidth = this.data.initial.initialW * newScale;
+        const newHeight = this.data.initial.initialH * newScale;
+        
+        // 计算新的位置，保持中心点不变
+        const newX = centerX - newWidth / 2;
+        const newY = centerY - newHeight / 2;
+        
+        // 应用缩放和旋转
+        lastImg.scale = newScale;
+        lastImg.rotate = newRotate;
+        lastImg.w = newWidth;
+        lastImg.h = newHeight;
+        lastImg.x = newX;
+        lastImg.y = newY;
+        
+        this.draw();
+      }
+    },
+    end(e) {
+      // 清除双指操作的状态
+      this.data.twoFingerInitial = null;
     }
   }
 })
